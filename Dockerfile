@@ -1,6 +1,9 @@
 FROM debian:jessie
 
-RUN apt-get update && apt-get install -y \
+# Use archive.debian.org for old Debian versions
+RUN echo "deb http://archive.debian.org/debian jessie main" > /etc/apt/sources.list && \
+    echo "deb http://archive.debian.org/debian-security jessie/updates main" >> /etc/apt/sources.list && \
+    apt-get update && apt-get install -y \
     build-essential \
     cmake \
     curl \
