@@ -1,0 +1,120 @@
+name: Build Neovim with old GLIBC
+
+on:
+  schedule:
+    # Check for new releases daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Neovim version to build (default: latest)'
+        required: false
+        default: 'latest'
+
+jobs:
+  check-new-release:
+    runs-on: ubuntu-latest
+    outputs:
+      should-build: ${{ steps.check.outputs.should-build }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check for new release
+        id: check
+        run: |
+          # Get latest Neovim version
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/')
+          echo "Latest version: $LATEST_VERSION"
+          
+          # Check if we already built this version
+          if gh release view "$LATEST_VERSION" >/dev/null 2>&1; then
+            echo "Version $LATEST_VERSION already exists, skipping build"
+            echo "should-build=false" >> $GITHUB_OUTPUT
+          else
+            echo "New version $LATEST_VERSION found, will build"
+            echo "should-build=true" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: check-new-release
+    if: needs.check-new-release.outputs.should-build == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up QEMU for multi-arch builds
+        uses: docker/setup-qemu-action@v3
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Build for ${{ matrix.arch }}
+        run: |
+          VERSION=${{ github.event.inputs.version || needs.check-new-release.outputs.version }}
+          
+          # Build using Docker for the target architecture
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            docker buildx build --platform linux/arm64 --load -t neovim-builder .
+            docker run --rm --platform linux/arm64 -v $(pwd):/output neovim-builder bash -c "
+              cd /build && 
+              /output/build.sh arm64 $VERSION && 
+              cp nvim-linux-arm64.tar.gz /output/"
+          else
+            docker buildx build --platform linux/amd64 --load -t neovim-builder .
+            docker run --rm --platform linux/amd64 -v $(pwd):/output neovim-builder bash -c "
+              cd /build && 
+              /output/build.sh x86_64 $VERSION && 
+              cp nvim-linux-x86_64.tar.gz /output/"
+          fi
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvim-linux-${{ matrix.arch }}
+          path: nvim-linux-${{ matrix.arch }}.tar.gz
+
+  release:
+    needs: [check-new-release, build]
+    if: needs.check-new-release.outputs.should-build == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        
+      - name: Create release
+        run: |
+          VERSION=${{ github.event.inputs.version || needs.check-new-release.outputs.version }}
+          
+          # Create release
+          gh release create "$VERSION" \
+            --title "Neovim $VERSION (Old GLIBC Compatible)" \
+            --notes "Neovim $VERSION compiled with old GLIBC for compatibility with older Linux distributions.
+
+          Built on Debian Jessie for maximum compatibility.
+          
+          ## Downloads
+          - **nvim-linux-x86_64.tar.gz**: For x86_64 Linux systems
+          - **nvim-linux-arm64.tar.gz**: For ARM64 Linux systems
+          
+          ## Installation
+          1. Download the appropriate tarball for your architecture
+          2. Extract: \`tar -xzf nvim-linux-\<arch\>.tar.gz\`
+          3. Add to PATH or copy to /usr/local
+          
+          Built from: https://github.com/neovim/neovim/releases/tag/$VERSION" \
+            nvim-linux-x86_64/nvim-linux-x86_64.tar.gz \
+            nvim-linux-arm64/nvim-linux-arm64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
