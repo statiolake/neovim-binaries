@@ -3,6 +3,7 @@ set -euo pipefail
 
 ARCH=${1:-$(uname -m)}
 NEOVIM_VERSION=${2:-"latest"}
+CMAKE_BUILD_TYPE=${3:-"Release"}
 
 echo "Building Neovim for architecture: $ARCH"
 
@@ -12,7 +13,7 @@ if [ "$NEOVIM_VERSION" = "latest" ]; then
     echo "Latest Neovim version: $NEOVIM_VERSION"
 fi
 
-# Clone or update Neovim source
+# Clone Neovim source with shallow checkout for specific version
 if [ ! -d "neovim" ]; then
     git clone --depth 1 --branch "$NEOVIM_VERSION" https://github.com/neovim/neovim.git
 else
@@ -27,25 +28,25 @@ cd neovim
 # Clean previous builds
 rm -rf build .deps
 
-# Build dependencies
-make CMAKE_BUILD_TYPE=Release deps
+# Build dependencies using CMake (following official workflow)
+echo "Building dependencies..."
+cmake -S cmake.deps -B .deps -G Ninja \
+    -D CMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE"
+cmake --build .deps
 
-# Build Neovim
-make CMAKE_BUILD_TYPE=Release CMAKE_INSTALL_PREFIX=/tmp/nvim-install
+# Build Neovim using CMake (following official workflow)
+echo "Building Neovim..."
+cmake -B build -G Ninja \
+    -D CMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE"
+cmake --build build
 
-# Install to temporary directory
-make CMAKE_BUILD_TYPE=Release CMAKE_INSTALL_PREFIX=/tmp/nvim-install install
+# Package using cpack (following official workflow)
+echo "Packaging..."
+cpack --config build/CPackConfig.cmake -G TGZ
 
-# Create the target directory structure
-mkdir -p "../nvim-linux-${ARCH}"
-cp -r /tmp/nvim-install/bin "../nvim-linux-${ARCH}/"
-cp -r /tmp/nvim-install/share "../nvim-linux-${ARCH}/"
+# Move the generated tarball to expected location
+mv build/nvim-linux-${ARCH}.tar.gz ../
 
 cd ..
 
-# Create tarball
-tar -czf "nvim-linux-${ARCH}.tar.gz" "nvim-linux-${ARCH}"
-
 echo "Build completed: nvim-linux-${ARCH}.tar.gz"
-echo "Contents:"
-ls -la "nvim-linux-${ARCH}/"
