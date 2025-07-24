@@ -1,5 +1,8 @@
 name: Build Neovim with old GLIBC
 
+permissions:
+  contents: write
+
 on:
   schedule:
     # Check for new releases daily at 2 AM UTC
