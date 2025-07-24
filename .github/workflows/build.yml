@@ -43,17 +43,18 @@ jobs:
   build:
     needs: check-new-release
     if: needs.check-new-release.outputs.should-build == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        arch: [x86_64, arm64]
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm64
     
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up QEMU for multi-arch builds
-        uses: docker/setup-qemu-action@v3
-        
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         
@@ -61,20 +62,12 @@ jobs:
         run: |
           VERSION=${{ github.event.inputs.version || needs.check-new-release.outputs.version }}
           
-          # Build using Docker for the target architecture
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            docker buildx build --platform linux/arm64 --load -t neovim-builder .
-            docker run --rm --platform linux/arm64 -v $(pwd):/output neovim-builder bash -c "
-              cd /build && 
-              /output/build.sh arm64 $VERSION && 
-              cp nvim-linux-arm64.tar.gz /output/"
-          else
-            docker buildx build --platform linux/amd64 --load -t neovim-builder .
-            docker run --rm --platform linux/amd64 -v $(pwd):/output neovim-builder bash -c "
-              cd /build && 
-              /output/build.sh x86_64 $VERSION && 
-              cp nvim-linux-x86_64.tar.gz /output/"
-          fi
+          # Build using native Docker (no cross-compilation needed)
+          docker build --load -t neovim-builder .
+          docker run --rm -v $(pwd):/output neovim-builder bash -c "
+            cd /build && 
+            /output/build.sh ${{ matrix.arch }} $VERSION && 
+            cp nvim-linux-${{ matrix.arch }}.tar.gz /output/"
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
