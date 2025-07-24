@@ -12,7 +12,7 @@ on:
         default: "latest"
 
 jobs:
-  check-new-release:
+  check-build:
     runs-on: ubuntu-latest
     outputs:
       should-build: ${{ steps.check.outputs.should-build }}
@@ -23,32 +23,38 @@ jobs:
       - name: Check for new release
         id: check
         run: |
-          # Get latest Neovim version
-          LATEST_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/')
-          echo "Latest version: $LATEST_VERSION"
+          # Use input version if provided, otherwise get latest
+          if [ "${{ github.event.inputs.version }}" != "" ] && [ "${{ github.event.inputs.version }}" != "latest" ]; then
+            TARGET_VERSION="${{ github.event.inputs.version }}"
+            echo "Using input version: $TARGET_VERSION"
+          else
+            # Get latest Neovim version
+            TARGET_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/')
+            echo "Latest version: $TARGET_VERSION"
+          fi
 
           # Check if we already built this version
-          if gh release view "$LATEST_VERSION" >/dev/null 2>&1; then
-            echo "Version $LATEST_VERSION already exists, skipping build"
+          if gh release view "$TARGET_VERSION" >/dev/null 2>&1; then
+            echo "Version $TARGET_VERSION already exists, skipping build"
             echo "should-build=false" >> $GITHUB_OUTPUT
           else
-            echo "New version $LATEST_VERSION found, will build"
+            echo "Version $TARGET_VERSION found, will build"
             echo "should-build=true" >> $GITHUB_OUTPUT
           fi
 
-          echo "version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          echo "version=$TARGET_VERSION" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
-    needs: check-new-release
-    if: needs.check-new-release.outputs.should-build == 'true' || github.event_name == 'workflow_dispatch'
+    needs: check-build
+    if: needs.check-build.outputs.should-build == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
 
@@ -60,7 +66,7 @@ jobs:
 
       - name: Build for ${{ matrix.arch }}
         run: |
-          VERSION=${{ github.event.inputs.version || needs.check-new-release.outputs.version }}
+          VERSION=${{ needs.check-build.outputs.version }}
 
           # Build using native Docker (no cross-compilation needed)
           docker build --load -t neovim-builder .
@@ -76,8 +82,8 @@ jobs:
           path: nvim-linux-${{ matrix.arch }}.tar.gz
 
   release:
-    needs: [check-new-release, build]
-    if: needs.check-new-release.outputs.should-build == 'true' || github.event_name == 'workflow_dispatch'
+    needs: [check-build, build]
+    if: needs.check-build.outputs.should-build == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
@@ -88,7 +94,7 @@ jobs:
 
       - name: Create release
         run: |
-          VERSION=${{ github.event.inputs.version || needs.check-new-release.outputs.version }}
+          VERSION=${{ needs.check-build.outputs.version }}
 
           # Create release
           gh release create "$VERSION" \
